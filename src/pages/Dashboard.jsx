@@ -1,47 +1,39 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { collection, onSnapshot, query, orderBy, setDoc, doc, addDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, setDoc, doc, addDoc, getDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { JEE_SYLLABUS } from '../data/jeeChapters';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
-import { 
-  ArrowLeft, Clock, Flame, Target, Swords, BrainCircuit, BellOff, CheckCircle2, 
-  BookOpen, Activity, Grid, PenTool, Edit3, TrendingUp
-} from 'lucide-react';
+import { ArrowLeft, Clock, Flame, Target, Swords, BrainCircuit, BellOff, CheckCircle2, BookOpen, Activity, Grid, PenTool, Edit3, TrendingUp, Crown } from 'lucide-react';
 
 const JEE_TARGET = new Date('2027-01-20T00:00:00');
 const TARGET_QS_PER_CHAPTER = 60; 
 const ACCURACY_THRESHOLD = 75;
-
 const names = { user1: 'Sharaan', user2: 'Anadi' };
 
 export default function Dashboard() {
   const { userId } = useParams();
   
-  // --- STATE ---
   const [progressData, setProgressData] = useState([]);
   const [mockScores, setMockScores] = useState([]);
   const [snoozedData, setSnoozedData] = useState({});
   const [completedChapters, setCompletedChapters] = useState([]);
   const [goals, setGoals] = useState({ user1: 350, user2: 350 });
+  const [heatmapMax, setHeatmapMax] = useState(80); // Dynamic Admin Limit
 
-  // UI States
   const [compSubject, setCompSubject] = useState('Physics');
   const [compChapter, setCompChapter] = useState(JEE_SYLLABUS.Physics[0]);
   const [newGoal, setNewGoal] = useState('');
   
-  // Quick Log States
   const [logSub, setLogSub] = useState('Physics');
   const [logChap, setLogChap] = useState(JEE_SYLLABUS.Physics[0]);
   const [logAtt, setLogAtt] = useState('');
   const [logCor, setLogCor] = useState('');
 
-  // Chart State
   const [chartMode, setChartMode] = useState('weekly');
   const [chartSub, setChartSub] = useState('Physics');
   const [chartChap, setChartChap] = useState(JEE_SYLLABUS.Physics[0]);
 
-  // --- FIREBASE LISTENERS ---
   useEffect(() => {
     const unsubP = onSnapshot(collection(db, 'progress'), s => setProgressData(s.docs.map(d => d.data())));
     const unsubM = onSnapshot(query(collection(db, 'mockMarks'), orderBy('createdAt', 'asc')), s => setMockScores(s.docs.map(d => d.data())));
@@ -54,20 +46,23 @@ export default function Dashboard() {
       s.docs.forEach(d => { g[d.id] = d.data().weeklyTarget; });
       setGoals(g);
     });
+    
+    // Fetch custom heatmap block size
+    getDoc(doc(db, 'appSettings', 'general')).then(snap => {
+      if(snap.exists() && snap.data().heatmapBlocks) setHeatmapMax(snap.data().heatmapBlocks);
+    });
+
     return () => { unsubP(); unsubM(); unsubC(); unsubS(); unsubG(); };
   }, []);
 
-  // --- DERIVED METRICS ---
   const daysLeft = Math.max(0, Math.ceil((JEE_TARGET - new Date()) / 86400000));
-  const daysToWeekend = 6 - new Date().getDay(); // 6 is Saturday
+  const daysToWeekend = 6 - new Date().getDay(); 
 
   const completedSet = useMemo(() => new Set(completedChapters.filter(c => c.userId === userId).map(c => c.chapter)), [completedChapters, userId]);
 
-  // 1. Weekly Stats & Accuracy & Bar Chart Data
   const weeklyStats = useMemo(() => {
     let u1Att = 0, u1Cor = 0, u2Att = 0, u2Cor = 0;
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => ({ name: d, user1: 0, user2: 0 }));
-    
     const sun = new Date(); sun.setDate(sun.getDate() - sun.getDay()); sun.setHours(0,0,0,0);
     
     progressData.forEach(p => {
@@ -86,7 +81,6 @@ export default function Dashboard() {
     };
   }, [progressData]);
 
-  // 2. Chapter Filter Chart Data
   const chapterChartData = useMemo(() => {
     let u1 = 0, u2 = 0;
     progressData.forEach(p => {
@@ -98,7 +92,6 @@ export default function Dashboard() {
     return [{ name: chartChap, user1: u1, user2: u2 }];
   }, [progressData, chartChap]);
 
-  // 3. Live 24-Hour Activity Feed
   const activityFeed = useMemo(() => {
     const dayAgo = Date.now() - 86400000;
     let items = [];
@@ -117,7 +110,7 @@ export default function Dashboard() {
     return items.sort((a,b) => b.time - a.time);
   }, [progressData, completedChapters, mockScores]);
 
-  // 4. Heatmap Data (80 Chapters)
+  // Dynamic Heatmap (Supports customizable block count)
   const heatmapData = useMemo(() => {
     const res = [];
     ['Physics', 'Chemistry', 'Mathematics'].forEach(sub => {
@@ -125,10 +118,15 @@ export default function Dashboard() {
         res.push({ name: chap, subject: sub, done: completedSet.has(chap) });
       });
     });
-    return res;
-  }, [completedSet]);
 
-  // 5. Competitive Streak
+    // Pad or slice based on Admin's setting
+    if (res.length > heatmapMax) return res.slice(0, heatmapMax);
+    while (res.length < heatmapMax) {
+      res.push({ name: 'Unassigned/Mock', subject: 'None', done: false, isPlaceholder: true });
+    }
+    return res;
+  }, [completedSet, heatmapMax]);
+
   const competitiveStreak = useMemo(() => {
     const dailyTotals = {};
     progressData.forEach(p => {
@@ -148,7 +146,6 @@ export default function Dashboard() {
     return streak;
   }, [progressData, userId]);
 
-  // 6. Actionable Algorithm Queue
   const actionableChapters = useMemo(() => {
     const stats = {};
     progressData.filter(p => p.userId === userId).forEach(p => {
@@ -179,14 +176,13 @@ export default function Dashboard() {
     return actions.sort((a,b) => b.weight - a.weight).slice(0, 3);
   }, [progressData, userId, snoozedData, daysLeft, completedSet]);
 
-  // --- ACTIONS ---
+  // Actions
   const handleSetGoal = async (e) => {
     e.preventDefault();
     if (!newGoal) return;
     await setDoc(doc(db, 'userGoals', userId), { weeklyTarget: Number(newGoal) }, { merge: true });
     setNewGoal('');
   };
-
   const handleQuickLog = async (e) => {
     e.preventDefault();
     if (Number(logCor) > Number(logAtt)) return alert("Correct can't exceed Attempted!");
@@ -194,35 +190,35 @@ export default function Dashboard() {
       userId, subject: logSub, chapter: logChap,
       questionsSolved: Number(logAtt), correctAnswers: Number(logCor), timestamp: new Date()
     });
-    setLogAtt(''); setLogCor('');
-    alert('Logged successfully!');
+    setLogAtt(''); setLogCor(''); alert('Logged successfully!');
   };
-
   const handleMarkComplete = async (e) => {
     e.preventDefault();
     if (completedSet.has(compChapter)) return alert('Already completed!');
     await addDoc(collection(db, 'completedChapters'), { userId, subject: compSubject, chapter: compChapter, completedAt: new Date() });
   };
-
   const handleSnooze = async (chapter, days) => {
     const d = new Date(); d.setDate(d.getDate() + days);
     await setDoc(doc(db, 'chapterMeta', `${userId}_${chapter.replace(/\s+/g, '')}`), { userId, chapter, delayUntil: d.getTime() });
   };
 
+  // Gamified Tug-of-war calculation
+  const totalVolume = weeklyStats.u1Vol + weeklyStats.u2Vol;
+  const u1Dominance = totalVolume > 0 ? (weeklyStats.u1Vol / totalVolume) * 100 : 50;
+
   return (
     <div className="min-h-screen bg-ctp-crust text-ctp-text font-sans p-4 md:p-8">
       
-      {/* Header */}
-      <header className="max-w-6xl mx-auto flex items-center justify-between bg-ctp-base/60 backdrop-blur-xl p-4 md:px-6 rounded-3xl border border-ctp-surface0 shadow-sm mb-6 sticky top-4 z-50">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="p-2 bg-ctp-surface0 hover:bg-ctp-surface1 rounded-full text-ctp-subtext0"><ArrowLeft size={18} /></Link>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-ctp-lavender">{names[userId]}</h1>
-            <p className="text-[11px] text-ctp-subtext0 font-medium uppercase tracking-wider">Mission Control</p>
+      <header className="max-w-6xl mx-auto flex items-center justify-between bg-ctp-base/60 backdrop-blur-xl p-4 md:px-6 rounded-3xl border border-ctp-surface0 shadow-sm mb-6 sticky top-4 z-50 overflow-hidden">
+        <div className="flex items-center gap-4 min-w-0">
+          <Link to="/" className="p-2 bg-ctp-surface0 hover:bg-ctp-surface1 rounded-full shrink-0 text-ctp-subtext0"><ArrowLeft size={18} /></Link>
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold tracking-tight text-ctp-lavender truncate">{names[userId]}</h1>
+            <p className="text-[10px] sm:text-[11px] text-ctp-subtext0 font-medium uppercase tracking-wider truncate">Mission Control</p>
           </div>
         </div>
-        <div className="bg-gradient-to-r from-ctp-red to-ctp-peach text-ctp-crust font-black px-4 py-2 rounded-full text-xs flex items-center gap-2 shadow-lg">
-          <Clock size={16}/> {daysLeft} DAYS LEFT
+        <div className="bg-gradient-to-r from-ctp-red to-ctp-peach text-ctp-crust font-black px-4 py-2 rounded-full text-[10px] sm:text-xs flex items-center gap-1 sm:gap-2 shadow-lg whitespace-nowrap shrink-0">
+          <Clock size={14}/> {daysLeft} DAYS
         </div>
       </header>
 
@@ -232,21 +228,21 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm flex items-center justify-between relative overflow-hidden group">
             <div className="absolute top-0 right-0 w-32 h-32 bg-ctp-peach/5 rounded-full blur-2xl transition duration-500"/>
-            <div className="relative z-10">
+            <div className="relative z-10 min-w-0">
               <p className="text-xs text-ctp-subtext0 font-bold uppercase mb-1">Dominance Streak</p>
-              <p className="text-4xl font-black text-ctp-peach">{competitiveStreak} <span className="text-base font-medium text-ctp-subtext0">Days</span></p>
+              <p className="text-4xl font-black text-ctp-peach truncate">{competitiveStreak} <span className="text-base font-medium text-ctp-subtext0">Days</span></p>
             </div>
-            <Flame size={48} className={`relative z-10 ${competitiveStreak > 0 ? 'text-ctp-peach' : 'text-ctp-surface2'}`} />
+            <Flame size={48} className={`relative z-10 shrink-0 ${competitiveStreak > 0 ? 'text-ctp-peach' : 'text-ctp-surface2'}`} />
           </div>
 
-          <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm relative overflow-hidden flex flex-col justify-between">
-            <div className="flex justify-between items-start">
-              <div className="flex items-center gap-2 text-ctp-green"><Target size={18}/> <span className="text-xs font-bold uppercase tracking-wider">Weekly Goal</span></div>
-              <span className="text-[10px] font-bold text-ctp-subtext0 bg-ctp-surface0 px-2 py-1 rounded-full">Ends in {daysToWeekend} days</span>
+          <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm relative flex flex-col justify-between">
+            <div className="flex justify-between items-start gap-2">
+              <div className="flex items-center gap-1.5 text-ctp-green shrink-0"><Target size={16}/> <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider">Weekly Goal</span></div>
+              <span className="text-[9px] sm:text-[10px] font-bold text-ctp-subtext0 bg-ctp-surface0 px-2 py-1 rounded-full shrink-0">Ends in {daysToWeekend} days</span>
             </div>
-            <div className="flex items-end justify-between mt-2">
-              <p className="text-3xl font-black">{userId === 'user1' ? weeklyStats.u1Vol : weeklyStats.u2Vol} <span className="text-lg font-medium text-ctp-subtext0">/ {goals[userId]}</span></p>
-              <form onSubmit={handleSetGoal} className="flex gap-1">
+            <div className="flex items-end justify-between mt-2 gap-2">
+              <p className="text-3xl font-black truncate">{userId === 'user1' ? weeklyStats.u1Vol : weeklyStats.u2Vol} <span className="text-lg font-medium text-ctp-subtext0">/ {goals[userId]}</span></p>
+              <form onSubmit={handleSetGoal} className="flex gap-1 shrink-0">
                 <input type="number" placeholder="New" value={newGoal} onChange={e=>setNewGoal(e.target.value)} className="w-14 bg-ctp-surface0 text-xs px-2 py-1 rounded-lg outline-none text-center" />
                 <button type="submit" className="bg-ctp-mauve text-ctp-crust p-1 rounded-lg"><Edit3 size={14}/></button>
               </form>
@@ -256,38 +252,44 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-ctp-base p-5 rounded-3xl border border-ctp-surface0 shadow-sm">
-             <div className="flex items-center gap-2 text-ctp-mauve mb-3"><Swords size={18}/> <span className="text-xs font-bold uppercase tracking-wider">Head to Head</span></div>
-             <div className="flex justify-between items-center text-center">
-               <div>
-                 <p className="text-2xl font-black text-ctp-blue">{weeklyStats.u1Vol}</p>
-                 <p className="text-[10px] font-bold text-ctp-subtext0">Sharaan</p>
-                 <p className="text-[9px] text-ctp-green font-bold mt-1">{weeklyStats.u1Acc}% Acc</p>
+          {/* Gamified Head-To-Head */}
+          <div className="bg-ctp-base p-5 rounded-3xl border border-ctp-surface0 shadow-sm flex flex-col justify-center">
+             <div className="flex items-center gap-2 text-ctp-mauve mb-3"><Swords size={18}/> <span className="text-xs font-bold uppercase tracking-wider">Tug of War (This Week)</span></div>
+             
+             <div className="flex justify-between items-end text-center px-2">
+               <div className="flex flex-col items-center">
+                 {weeklyStats.u1Vol > weeklyStats.u2Vol && <Crown size={16} className="text-ctp-yellow mb-1"/>}
+                 <p className="text-2xl font-black text-ctp-blue leading-none">{weeklyStats.u1Vol}</p>
+                 <p className="text-[10px] font-bold text-ctp-subtext0 mt-1">Sharaan</p>
+                 <p className="text-[9px] text-ctp-green font-bold">{weeklyStats.u1Acc}% Acc</p>
                </div>
-               <p className="text-xs font-black text-ctp-surface2 bg-ctp-surface0 px-2 py-1 rounded-full">VS</p>
-               <div>
-                 <p className="text-2xl font-black text-ctp-green">{weeklyStats.u2Vol}</p>
-                 <p className="text-[10px] font-bold text-ctp-subtext0">Anadi</p>
-                 <p className="text-[9px] text-ctp-green font-bold mt-1">{weeklyStats.u2Acc}% Acc</p>
+               <p className="text-[10px] font-black text-ctp-surface2 mb-4">VS</p>
+               <div className="flex flex-col items-center">
+                 {weeklyStats.u2Vol > weeklyStats.u1Vol && <Crown size={16} className="text-ctp-yellow mb-1"/>}
+                 <p className="text-2xl font-black text-ctp-green leading-none">{weeklyStats.u2Vol}</p>
+                 <p className="text-[10px] font-bold text-ctp-subtext0 mt-1">Anadi</p>
+                 <p className="text-[9px] text-ctp-green font-bold">{weeklyStats.u2Acc}% Acc</p>
                </div>
+             </div>
+
+             {/* Tug of War Bar */}
+             <div className="w-full h-2.5 bg-ctp-surface0 rounded-full mt-3 flex overflow-hidden">
+                <div className="bg-ctp-blue h-full transition-all duration-700 ease-out relative" style={{ width: `${u1Dominance}%` }}>
+                  <div className="absolute right-0 top-0 bottom-0 w-1 bg-ctp-text opacity-50"></div>
+                </div>
+                <div className="bg-ctp-green h-full transition-all duration-700 ease-out" style={{ width: `${100 - u1Dominance}%` }}></div>
              </div>
           </div>
         </div>
 
         {/* ROW 2: Action Queue, Logging & Chart */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
           <div className="col-span-1 flex flex-col gap-6">
-            {/* Quick Log Practice */}
             <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm">
               <div className="flex items-center gap-2 text-ctp-blue mb-4"><PenTool size={20}/> <h2 className="font-bold text-base tracking-tight">Quick Log Practice</h2></div>
               <form onSubmit={handleQuickLog} className="space-y-3">
-                <select value={logSub} onChange={e => {setLogSub(e.target.value); setLogChap(JEE_SYLLABUS[e.target.value][0])}} className="w-full bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1">
-                  <option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option>
-                </select>
-                <select value={logChap} onChange={e => setLogChap(e.target.value)} className="w-full bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1">
-                  {JEE_SYLLABUS[logSub].map(c => <option key={c}>{c}</option>)}
-                </select>
+                <select value={logSub} onChange={e => {setLogSub(e.target.value); setLogChap(JEE_SYLLABUS[e.target.value][0])}} className="w-full bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1"><option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option></select>
+                <select value={logChap} onChange={e => setLogChap(e.target.value)} className="w-full bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1">{JEE_SYLLABUS[logSub].map(c => <option key={c}>{c}</option>)}</select>
                 <div className="grid grid-cols-2 gap-2">
                   <input type="number" placeholder="Attempted" value={logAtt} onChange={e=>setLogAtt(e.target.value)} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1" required/>
                   <input type="number" placeholder="Correct" value={logCor} onChange={e=>setLogCor(e.target.value)} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1" required/>
@@ -296,18 +298,15 @@ export default function Dashboard() {
               </form>
             </div>
 
-            {/* Smart Queue */}
-            <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm flex-1 flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2 text-ctp-red"><BrainCircuit size={20}/> <h2 className="font-bold text-base tracking-tight">Smart Queue</h2></div>
-              </div>
-              <div className="space-y-3 flex-1">
+            <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm flex-1 flex flex-col min-h-[250px]">
+              <div className="flex items-center gap-2 text-ctp-red mb-4"><BrainCircuit size={20}/> <h2 className="font-bold text-base tracking-tight">Smart Queue</h2></div>
+              <div className="space-y-3 flex-1 overflow-y-auto pr-1">
                 {actionableChapters.map((w, i) => (
                   <div key={i} className="bg-ctp-surface0/50 p-4 rounded-2xl border border-ctp-surface0/50">
                     <div className="flex justify-between items-start mb-2"><p className="text-sm font-bold line-clamp-1 pr-2">{w.chapter}</p><span className="text-[10px] font-bold px-2 py-1 bg-ctp-red/10 text-ctp-red rounded-lg">{w.acc}% Acc</span></div>
                     <div className="flex items-center justify-between border-t border-ctp-surface0 pt-3 mt-2">
                       <div className="flex items-center gap-1.5 text-ctp-green text-xs font-bold"><CheckCircle2 size={14} /> Solve {w.minQs} Qs</div>
-                      <div className="flex gap-1"><button onClick={() => handleSnooze(w.chapter, 1)} className="p-1 hover:bg-ctp-surface1 rounded"><BellOff size={14}/></button></div>
+                      <button onClick={() => handleSnooze(w.chapter, 1)} className="p-1 hover:bg-ctp-surface1 rounded"><BellOff size={14}/></button>
                     </div>
                   </div>
                 ))}
@@ -316,30 +315,27 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Practice Chart & Mark Complete */}
           <div className="col-span-1 lg:col-span-2 flex flex-col gap-6">
-            
-            {/* Chart */}
             <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm flex-1 flex flex-col min-h-[350px]">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
                 <div>
                   <h2 className="font-bold text-lg tracking-tight">Practice Comparison</h2>
                   <p className="text-xs text-ctp-subtext0">Sharaan vs Anadi Questions Solved</p>
                 </div>
-                <div className="flex gap-2 bg-ctp-surface0 p-1 rounded-xl">
+                <div className="flex gap-2 bg-ctp-surface0 p-1 rounded-xl self-start sm:self-auto">
                   <button onClick={() => setChartMode('weekly')} className={`px-3 py-1 text-xs font-bold rounded-lg ${chartMode==='weekly'?'bg-ctp-mauve text-ctp-crust':'text-ctp-subtext0'}`}>Weekly</button>
                   <button onClick={() => setChartMode('chapter')} className={`px-3 py-1 text-xs font-bold rounded-lg ${chartMode==='chapter'?'bg-ctp-mauve text-ctp-crust':'text-ctp-subtext0'}`}>By Chapter</button>
                 </div>
               </div>
 
               {chartMode === 'chapter' && (
-                <div className="flex gap-2 mb-4">
-                  <select value={chartSub} onChange={e => {setChartSub(e.target.value); setChartChap(JEE_SYLLABUS[e.target.value][0])}} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1"><option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option></select>
-                  <select value={chartChap} onChange={e => setChartChap(e.target.value)} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1 flex-1">{JEE_SYLLABUS[chartSub].map(c => <option key={c}>{c}</option>)}</select>
+                <div className="flex flex-col sm:flex-row gap-2 mb-4">
+                  <select value={chartSub} onChange={e => {setChartSub(e.target.value); setChartChap(JEE_SYLLABUS[e.target.value][0])}} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1 w-full sm:w-auto"><option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option></select>
+                  <select value={chartChap} onChange={e => setChartChap(e.target.value)} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1 flex-1 w-full">{JEE_SYLLABUS[chartSub].map(c => <option key={c}>{c}</option>)}</select>
                 </div>
               )}
 
-              <div className="flex-1 w-full">
+              <div className="flex-1 w-full min-h-[200px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartMode === 'weekly' ? weeklyStats.chartData : chapterChartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#313244" vertical={false} opacity={0.5} />
@@ -354,48 +350,46 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Mark Complete */}
             <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm flex flex-col md:flex-row items-center gap-4">
                <div className="flex items-center gap-2 text-ctp-green whitespace-nowrap"><BookOpen size={20}/> <h2 className="font-bold">Log Completion</h2></div>
-               <form onSubmit={handleMarkComplete} className="flex flex-1 gap-2 w-full">
-                <select value={compSubject} onChange={e => {setCompSubject(e.target.value); setCompChapter(JEE_SYLLABUS[e.target.value][0])}} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1"><option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option></select>
-                <select value={compChapter} onChange={e => setCompChapter(e.target.value)} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1 flex-1">{JEE_SYLLABUS[compSubject].map(c => <option key={c}>{c}</option>)}</select>
-                <button type="submit" className="bg-ctp-green text-ctp-crust px-4 font-bold rounded-xl hover:opacity-90 transition text-sm">Add</button>
+               <form onSubmit={handleMarkComplete} className="flex flex-col sm:flex-row flex-1 gap-2 w-full">
+                <select value={compSubject} onChange={e => {setCompSubject(e.target.value); setCompChapter(JEE_SYLLABUS[e.target.value][0])}} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1 w-full sm:w-auto"><option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option></select>
+                <select value={compChapter} onChange={e => setCompChapter(e.target.value)} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1 flex-1 w-full">{JEE_SYLLABUS[compSubject].map(c => <option key={c}>{c}</option>)}</select>
+                <button type="submit" className="bg-ctp-green text-ctp-crust px-4 py-2 font-bold rounded-xl hover:opacity-90 transition text-sm w-full sm:w-auto">Add</button>
                </form>
             </div>
-
           </div>
         </div>
 
         {/* ROW 3: Heatmap & Activity Feed */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* Syllabus Heatmap */}
           <div className="col-span-1 lg:col-span-2 bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm">
-            <div className="flex items-center gap-2 text-ctp-peach mb-2"><Grid size={20}/> <h2 className="font-bold text-base tracking-tight">Syllabus Heatmap (80 Chapters)</h2></div>
-            <p className="text-xs text-ctp-subtext0 mb-4">Visual completion grid. Physics (Blue), Chemistry (Yellow), Math (Green).</p>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 text-ctp-peach"><Grid size={20}/> <h2 className="font-bold text-base tracking-tight">Syllabus Heatmap</h2></div>
+              <span className="text-[10px] font-bold text-ctp-subtext0 bg-ctp-surface0 px-2 py-1 rounded-full">{heatmapMax} Blocks</span>
+            </div>
             
             <div className="flex flex-wrap gap-1.5 justify-start">
               {heatmapData.map((chap, i) => {
-                let colorClass = 'bg-ctp-surface0 border border-ctp-surface1'; // Default
-                if (chap.done) {
+                let colorClass = 'bg-ctp-surface0 border border-ctp-surface1'; 
+                if (chap.isPlaceholder) colorClass = 'bg-ctp-crust border border-ctp-surface0/50 opacity-40';
+                else if (chap.done) {
                   if (chap.subject === 'Physics') colorClass = 'bg-ctp-blue border border-ctp-blue';
                   else if (chap.subject === 'Chemistry') colorClass = 'bg-ctp-yellow border border-ctp-yellow';
                   else if (chap.subject === 'Mathematics') colorClass = 'bg-ctp-green border border-ctp-green';
                 }
                 return (
-                  <div key={i} className={`w-4 h-4 md:w-5 md:h-5 rounded-[4px] tooltip cursor-pointer transition ${colorClass}`} title={`${chap.name} (${chap.subject})`}></div>
+                  <div key={i} className={`w-3.5 h-3.5 sm:w-4 sm:h-4 md:w-5 md:h-5 rounded-[4px] tooltip cursor-pointer transition ${colorClass}`} title={`${chap.name} (${chap.subject})`}></div>
                 );
               })}
             </div>
-            <div className="flex items-center gap-4 mt-6 text-[10px] font-bold text-ctp-subtext0 uppercase tracking-wider">
+            <div className="flex flex-wrap items-center gap-4 mt-6 text-[10px] font-bold text-ctp-subtext0 uppercase tracking-wider">
               <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-[3px] bg-ctp-blue"></div> Physics</div>
               <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-[3px] bg-ctp-yellow"></div> Chemistry</div>
               <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-[3px] bg-ctp-green"></div> Math</div>
             </div>
           </div>
 
-          {/* 24 Hour Activity Feed */}
           <div className="col-span-1 bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm flex flex-col max-h-[300px]">
             <div className="flex items-center justify-between mb-4 text-ctp-lavender">
               <div className="flex items-center gap-2"><Activity size={20} className="animate-pulse"/> <h2 className="font-bold text-base tracking-tight">Live Activity (24H)</h2></div>
@@ -407,7 +401,7 @@ export default function Dashboard() {
                   {act.type === 'practice' && <PenTool size={14} className="text-ctp-blue mt-0.5 shrink-0"/>}
                   {act.type === 'complete' && <CheckCircle2 size={14} className="text-ctp-green mt-0.5 shrink-0"/>}
                   {act.type === 'mock' && <TrendingUp size={14} className="text-ctp-peach mt-0.5 shrink-0"/>}
-                  <div className="text-xs leading-relaxed">
+                  <div className="text-xs leading-relaxed break-words min-w-0">
                     <span className="font-bold capitalize text-ctp-text">{names[act.user]}</span> <span className="text-ctp-subtext0">{act.text}</span>
                   </div>
                 </div>
@@ -416,7 +410,6 @@ export default function Dashboard() {
               )}
             </div>
           </div>
-
         </div>
       </div>
     </div>

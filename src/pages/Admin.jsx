@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, addDoc, getDocs, deleteDoc, updateDoc, doc, query, orderBy } from 'firebase/firestore';
+import { collection, addDoc, getDocs, deleteDoc, updateDoc, doc, query, orderBy, getDoc, setDoc } from 'firebase/firestore';
 import { JEE_SYLLABUS } from '../data/jeeChapters';
-import { Shield, Trash2, Edit2, Save, X, Download } from 'lucide-react';
+import { Shield, Trash2, Edit2, Save, X, Download, Settings } from 'lucide-react';
 
 export default function Admin() {
   const [activeTab, setActiveTab] = useState('progress');
@@ -21,35 +21,40 @@ export default function Admin() {
   const [mockChem, setMockChem] = useState('');
   const [mockMath, setMockMath] = useState('');
 
-  // Data editor states
+  // Data editor & Settings states
   const [records, setRecords] = useState({ progress: [], mocks: [] });
   const [editingId, setEditingId] = useState(null);
-  const [editData, setEditData] = useState({}); // Holds temp data while editing
+  const [editData, setEditData] = useState({});
+  const [heatmapBlocks, setHeatmapBlocks] = useState(80); // Default
 
   const fetchRecords = async () => {
     const pSnap = await getDocs(query(collection(db, 'progress'), orderBy('timestamp', 'desc')));
     const mSnap = await getDocs(query(collection(db, 'mockMarks'), orderBy('createdAt', 'desc')));
-
     setRecords({
       progress: pSnap.docs.map(d => ({ id: d.id, ...d.data() })),
       mocks: mSnap.docs.map(d => ({ id: d.id, ...d.data() }))
     });
   };
 
+  const fetchSettings = async () => {
+    const sSnap = await getDoc(doc(db, 'appSettings', 'general'));
+    if (sSnap.exists() && sSnap.data().heatmapBlocks) {
+      setHeatmapBlocks(sSnap.data().heatmapBlocks);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'manage') fetchRecords();
+    if (activeTab === 'settings') fetchSettings();
   }, [activeTab]);
 
   const handleLogProgress = async (e) => {
     e.preventDefault();
     if (Number(correct) > Number(attempted)) return alert("Correct answers can't exceed attempted!");
-    
     setLoading(true);
     await addDoc(collection(db, 'progress'), {
-      userId: user, subject, chapter,
-      questionsSolved: Number(attempted), 
-      correctAnswers: Number(correct),
-      timestamp: new Date()
+      userId: user, subject, chapter, questionsSolved: Number(attempted), 
+      correctAnswers: Number(correct), timestamp: new Date()
     });
     setAttempted(''); setCorrect(''); setLoading(false);
     alert('Practice logged with accuracy!');
@@ -59,58 +64,48 @@ export default function Admin() {
     e.preventDefault();
     const p = Number(mockPhy), c = Number(mockChem), m = Number(mockMath);
     if (p > 100 || c > 100 || m > 100) return alert('Max 100 per subject.');
-
     setLoading(true);
     await addDoc(collection(db, 'mockMarks'), {
-      userId: user, examName: mockName,
-      phyScore: p, chemScore: c, mathScore: m,
-      score: p + c + m,
-      createdAt: new Date()
+      userId: user, examName: mockName, phyScore: p, chemScore: c, mathScore: m,
+      score: p + c + m, createdAt: new Date()
     });
     setMockName(''); setMockPhy(''); setMockChem(''); setMockMath('');
     setLoading(false);
     alert('Mock test saved!');
   };
 
-  // --- DATA MANAGEMENT FUNCTIONS ---
+  const handleSaveSettings = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    await setDoc(doc(db, 'appSettings', 'general'), { heatmapBlocks: Number(heatmapBlocks) }, { merge: true });
+    setLoading(false);
+    alert('Settings saved!');
+  };
 
   const handleDelete = async (collectionName, id) => {
     if (confirm('Are you sure you want to permanently delete this record?')) {
       await deleteDoc(doc(db, collectionName, id));
-      fetchRecords(); // Refresh the list
+      fetchRecords();
     }
   };
 
   const startEditing = (record, type) => {
     setEditingId(record.id);
-    if (type === 'progress') {
-      setEditData({ attempted: record.questionsSolved, correct: record.correctAnswers });
-    } else {
-      setEditData({ examName: record.examName, phy: record.phyScore, chem: record.chemScore, math: record.mathScore });
-    }
+    if (type === 'progress') setEditData({ attempted: record.questionsSolved, correct: record.correctAnswers });
+    else setEditData({ examName: record.examName, phy: record.phyScore, chem: record.chemScore, math: record.mathScore });
   };
 
   const saveEdit = async (collectionName, id, type) => {
     try {
       if (type === 'progress') {
         if (Number(editData.correct) > Number(editData.attempted)) return alert("Correct can't exceed attempted!");
-        await updateDoc(doc(db, collectionName, id), {
-          questionsSolved: Number(editData.attempted),
-          correctAnswers: Number(editData.correct)
-        });
+        await updateDoc(doc(db, collectionName, id), { questionsSolved: Number(editData.attempted), correctAnswers: Number(editData.correct) });
       } else {
         const p = Number(editData.phy), c = Number(editData.chem), m = Number(editData.math);
-        await updateDoc(doc(db, collectionName, id), {
-          examName: editData.examName,
-          phyScore: p, chemScore: c, mathScore: m,
-          score: p + c + m
-        });
+        await updateDoc(doc(db, collectionName, id), { examName: editData.examName, phyScore: p, chemScore: c, mathScore: m, score: p + c + m });
       }
-      setEditingId(null);
-      fetchRecords();
-    } catch (err) {
-      alert("Error updating record: " + err.message);
-    }
+      setEditingId(null); fetchRecords();
+    } catch (err) { alert("Error updating record: " + err.message); }
   };
 
   const exportCSV = () => {
@@ -124,11 +119,9 @@ export default function Admin() {
       const date = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleDateString() : 'N/A';
       csv += `Mock,${m.userId},All,${m.examName},${m.score}/300,N/A,${date}\n`;
     });
-    
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'study_data.csv'; a.click();
+    const a = document.createElement('a'); a.href = url; a.download = 'study_data.csv'; a.click();
   };
 
   return (
@@ -139,7 +132,7 @@ export default function Admin() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {['progress', 'mock', 'manage'].map(tab => (
+        {['progress', 'mock', 'manage', 'settings'].map(tab => (
           <button key={tab} onClick={() => { setActiveTab(tab); setEditingId(null); }} className={`px-4 py-2 rounded-lg text-sm font-medium transition capitalize ${activeTab === tab ? 'bg-ctp-mauve text-ctp-crust' : 'bg-ctp-surface0 text-ctp-subtext0'}`}>
             {tab}
           </button>
@@ -147,53 +140,40 @@ export default function Admin() {
       </div>
 
       <div className="bg-ctp-surface0 p-6 rounded-2xl border border-ctp-surface1">
-        {activeTab === 'manage' ? (
+        {activeTab === 'settings' ? (
+          <form onSubmit={handleSaveSettings} className="space-y-4">
+            <h2 className="text-lg font-bold text-ctp-lavender mb-3 border-b border-ctp-surface1 pb-2 flex items-center gap-2"><Settings size={18}/> App Configuration</h2>
+            <div>
+              <label className="text-xs text-ctp-subtext0 mb-1 block">Total Heatmap Blocks (Default is 80)</label>
+              <input type="number" value={heatmapBlocks} onChange={e => setHeatmapBlocks(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 text-ctp-text outline-none" required />
+            </div>
+            <button type="submit" disabled={loading} className="w-full bg-ctp-blue text-ctp-crust font-semibold py-2.5 rounded-lg hover:opacity-90">Save Settings</button>
+          </form>
+        ) : activeTab === 'manage' ? (
           <div className="space-y-8">
-            <button onClick={exportCSV} className="bg-ctp-blue text-ctp-crust px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:opacity-90 transition">
-              <Download size={16}/> Export as CSV
-            </button>
-
-            {/* PROGRESS LOGS EDITOR */}
+            <button onClick={exportCSV} className="bg-ctp-blue text-ctp-crust px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:opacity-90 transition"><Download size={16}/> Export CSV</button>
+            
             <div>
               <h2 className="text-lg font-bold text-ctp-lavender mb-3 border-b border-ctp-surface1 pb-2">Practice Logs</h2>
               <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
                 {records.progress.map(p => (
-                  <div key={p.id} className="flex items-center justify-between bg-ctp-base p-3 rounded-lg border border-ctp-surface1 text-sm">
+                  <div key={p.id} className="flex flex-col md:flex-row items-start md:items-center justify-between bg-ctp-base p-3 rounded-lg border border-ctp-surface1 text-sm gap-2">
                     {editingId === p.id ? (
-                      <div className="flex-1 grid grid-cols-2 gap-2 mr-4">
-                        <div>
-                          <label className="text-[10px] text-ctp-subtext0">Attempted</label>
-                          <input type="number" value={editData.attempted} onChange={e => setEditData({...editData, attempted: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-ctp-subtext0">Correct</label>
-                          <input type="number" value={editData.correct} onChange={e => setEditData({...editData, correct: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
-                        </div>
+                      <div className="flex-1 grid grid-cols-2 gap-2 w-full">
+                        <div><label className="text-[10px] text-ctp-subtext0">Attempted</label><input type="number" value={editData.attempted} onChange={e => setEditData({...editData, attempted: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" /></div>
+                        <div><label className="text-[10px] text-ctp-subtext0">Correct</label><input type="number" value={editData.correct} onChange={e => setEditData({...editData, correct: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" /></div>
                       </div>
                     ) : (
-                      <div className="flex-1">
-                        <p className="font-bold text-ctp-text">
-                          <span className={p.userId === 'user1' ? 'text-ctp-blue' : 'text-ctp-green'}>
-                            {p.userId === 'user1' ? 'Sharaan' : 'Anadi'}
-                          </span>
-                          <span className="mx-2 text-ctp-subtext0">|</span> 
-                          {p.chapter}
-                        </p>
+                      <div className="flex-1 break-words">
+                        <p className="font-bold text-ctp-text"><span className={p.userId === 'user1' ? 'text-ctp-blue' : 'text-ctp-green'}>{p.userId === 'user1' ? 'Sharaan' : 'Anadi'}</span> <span className="mx-1 text-ctp-subtext0">|</span> {p.chapter}</p>
                         <p className="text-xs text-ctp-subtext1">Att: {p.questionsSolved} | Cor: {p.correctAnswers}</p>
                       </div>
                     )}
-                    
                     <div className="flex items-center gap-3">
                       {editingId === p.id ? (
-                        <>
-                          <button onClick={() => saveEdit('progress', p.id, 'progress')} className="text-ctp-green hover:opacity-80"><Save size={18}/></button>
-                          <button onClick={() => setEditingId(null)} className="text-ctp-subtext0 hover:opacity-80"><X size={18}/></button>
-                        </>
+                        <><button onClick={() => saveEdit('progress', p.id, 'progress')} className="text-ctp-green"><Save size={18}/></button><button onClick={() => setEditingId(null)} className="text-ctp-subtext0"><X size={18}/></button></>
                       ) : (
-                        <>
-                          <button onClick={() => startEditing(p, 'progress')} className="text-ctp-yellow hover:opacity-80"><Edit2 size={16}/></button>
-                          <button onClick={() => handleDelete('progress', p.id)} className="text-ctp-red hover:opacity-80"><Trash2 size={16}/></button>
-                        </>
+                        <><button onClick={() => startEditing(p, 'progress')} className="text-ctp-yellow"><Edit2 size={16}/></button><button onClick={() => handleDelete('progress', p.id)} className="text-ctp-red"><Trash2 size={16}/></button></>
                       )}
                     </div>
                   </div>
@@ -201,14 +181,13 @@ export default function Admin() {
               </div>
             </div>
 
-            {/* MOCK LOGS EDITOR */}
             <div>
               <h2 className="text-lg font-bold text-ctp-lavender mb-3 border-b border-ctp-surface1 pb-2">Mock Exams</h2>
               <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
                 {records.mocks.map(m => (
-                  <div key={m.id} className="flex flex-col md:flex-row md:items-center justify-between bg-ctp-base p-3 rounded-lg border border-ctp-surface1 text-sm gap-4">
+                  <div key={m.id} className="flex flex-col md:flex-row items-start md:items-center justify-between bg-ctp-base p-3 rounded-lg border border-ctp-surface1 text-sm gap-2">
                     {editingId === m.id ? (
-                      <div className="flex-1 space-y-2">
+                      <div className="flex-1 space-y-2 w-full">
                         <input type="text" value={editData.examName} onChange={e => setEditData({...editData, examName: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
                         <div className="grid grid-cols-3 gap-2">
                           <input type="number" placeholder="P" value={editData.phy} onChange={e => setEditData({...editData, phy: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
@@ -217,43 +196,28 @@ export default function Admin() {
                         </div>
                       </div>
                     ) : (
-                      <div className="flex-1">
-                        <p className="font-bold text-ctp-text">
-                          <span className={m.userId === 'user1' ? 'text-ctp-blue' : 'text-ctp-green'}>
-                            {m.userId === 'user1' ? 'Sharaan' : 'Anadi'}
-                          </span>
-                          <span className="mx-2 text-ctp-subtext0">|</span> 
-                          {m.examName}
-                        </p>
+                      <div className="flex-1 break-words">
+                        <p className="font-bold text-ctp-text"><span className={m.userId === 'user1' ? 'text-ctp-blue' : 'text-ctp-green'}>{m.userId === 'user1' ? 'Sharaan' : 'Anadi'}</span> <span className="mx-1 text-ctp-subtext0">|</span> {m.examName}</p>
                         <p className="text-xs text-ctp-subtext1">Total: {m.score}/300 (P:{m.phyScore} C:{m.chemScore} M:{m.mathScore})</p>
                       </div>
                     )}
-
                     <div className="flex items-center gap-3">
                       {editingId === m.id ? (
-                        <>
-                          <button onClick={() => saveEdit('mockMarks', m.id, 'mock')} className="text-ctp-green hover:opacity-80"><Save size={18}/></button>
-                          <button onClick={() => setEditingId(null)} className="text-ctp-subtext0 hover:opacity-80"><X size={18}/></button>
-                        </>
+                        <><button onClick={() => saveEdit('mockMarks', m.id, 'mock')} className="text-ctp-green"><Save size={18}/></button><button onClick={() => setEditingId(null)} className="text-ctp-subtext0"><X size={18}/></button></>
                       ) : (
-                        <>
-                          <button onClick={() => startEditing(m, 'mock')} className="text-ctp-yellow hover:opacity-80"><Edit2 size={16}/></button>
-                          <button onClick={() => handleDelete('mockMarks', m.id)} className="text-ctp-red hover:opacity-80"><Trash2 size={16}/></button>
-                        </>
+                        <><button onClick={() => startEditing(m, 'mock')} className="text-ctp-yellow"><Edit2 size={16}/></button><button onClick={() => handleDelete('mockMarks', m.id)} className="text-ctp-red"><Trash2 size={16}/></button></>
                       )}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
-
           </div>
         ) : (
           <form onSubmit={activeTab === 'progress' ? handleLogProgress : handleSaveMock} className="space-y-4">
             <select value={user} onChange={(e) => setUser(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 text-ctp-text outline-none text-sm">
               <option value="user1">Sharaan</option><option value="user2">Anadi</option>
             </select>
-
             {activeTab === 'progress' && (
               <>
                 <select value={subject} onChange={(e) => { setSubject(e.target.value); setChapter(JEE_SYLLABUS[e.target.value][0])}} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm"><option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option></select>
@@ -264,7 +228,6 @@ export default function Admin() {
                 </div>
               </>
             )}
-
             {activeTab === 'mock' && (
               <>
                 <input type="text" placeholder="Mock Exam Name" value={mockName} onChange={e => setMockName(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded border border-ctp-surface1 text-ctp-text" required />
