@@ -1,177 +1,281 @@
 import { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
+import { collection, addDoc, getDocs, deleteDoc, updateDoc, doc, query, orderBy } from 'firebase/firestore';
 import { JEE_SYLLABUS } from '../data/jeeChapters';
-import { Shield, PlusCircle, Award, CheckCircle2, Trash2, Database } from 'lucide-react';
+import { Shield, Trash2, Edit2, Save, X, Download } from 'lucide-react';
 
 export default function Admin() {
   const [activeTab, setActiveTab] = useState('progress');
   const [loading, setLoading] = useState(false);
 
-  // States
-  const [selectedUser, setSelectedUser] = useState('user1');
+  // Form states
+  const [user, setUser] = useState('user1');
   const [subject, setSubject] = useState('Physics');
-  const [selectedChapter, setSelectedChapter] = useState(JEE_SYLLABUS.Physics[0]);
-  const [questionsSolved, setQuestionsSolved] = useState('');
+  const [chapter, setChapter] = useState(JEE_SYLLABUS.Physics[0]);
+  const [attempted, setAttempted] = useState('');
+  const [correct, setCorrect] = useState('');
   
-  const [mockUser, setMockUser] = useState('user1');
+  // Mock form states
   const [mockName, setMockName] = useState('');
-  const [mockScore, setMockScore] = useState('');
-  const [mockSyllabus, setMockSyllabus] = useState('');
+  const [mockPhy, setMockPhy] = useState('');
+  const [mockChem, setMockChem] = useState('');
+  const [mockMath, setMockMath] = useState('');
 
-  const [logs, setLogs] = useState({ progress: [], mocks: [], completed: [] });
+  // Data editor states
+  const [records, setRecords] = useState({ progress: [], mocks: [] });
+  const [editingId, setEditingId] = useState(null);
+  const [editData, setEditData] = useState({}); // Holds temp data while editing
 
-  const handleSubjectChange = (newSub) => {
-    setSubject(newSub);
-    setSelectedChapter(JEE_SYLLABUS[newSub][0]);
-  };
-
-  const fetchDataLogs = async () => {
+  const fetchRecords = async () => {
     const pSnap = await getDocs(query(collection(db, 'progress'), orderBy('timestamp', 'desc')));
     const mSnap = await getDocs(query(collection(db, 'mockMarks'), orderBy('createdAt', 'desc')));
-    const cSnap = await getDocs(collection(db, 'completedChapters'));
-    
-    setLogs({
+
+    setRecords({
       progress: pSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-      mocks: mSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-      completed: cSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      mocks: mSnap.docs.map(d => ({ id: d.id, ...d.data() }))
     });
   };
 
   useEffect(() => {
-    if (activeTab === 'manage') fetchDataLogs();
+    if (activeTab === 'manage') fetchRecords();
   }, [activeTab]);
-
-  const handleDelete = async (collectionName, id) => {
-    if (confirm('Delete this record forever?')) {
-      await deleteDoc(doc(db, collectionName, id));
-      fetchDataLogs();
-    }
-  };
 
   const handleLogProgress = async (e) => {
     e.preventDefault();
+    if (Number(correct) > Number(attempted)) return alert("Correct answers can't exceed attempted!");
+    
     setLoading(true);
     await addDoc(collection(db, 'progress'), {
-      userId: selectedUser, subject, chapter: selectedChapter,
-      questionsSolved: Number(questionsSolved), timestamp: new Date()
+      userId: user, subject, chapter,
+      questionsSolved: Number(attempted), 
+      correctAnswers: Number(correct),
+      timestamp: new Date()
     });
-    setQuestionsSolved('');
-    setLoading(false);
-    alert('Logged!');
+    setAttempted(''); setCorrect(''); setLoading(false);
+    alert('Practice logged with accuracy!');
   };
 
-  const handleAddMock = async (e) => {
+  const handleSaveMock = async (e) => {
     e.preventDefault();
+    const p = Number(mockPhy), c = Number(mockChem), m = Number(mockMath);
+    if (p > 100 || c > 100 || m > 100) return alert('Max 100 per subject.');
+
     setLoading(true);
     await addDoc(collection(db, 'mockMarks'), {
-      userId: mockUser, examName: mockName, score: Number(mockScore),
-      syllabus: mockSyllabus, createdAt: new Date()
+      userId: user, examName: mockName,
+      phyScore: p, chemScore: c, mathScore: m,
+      score: p + c + m,
+      createdAt: new Date()
     });
-    setMockName(''); setMockScore(''); setMockSyllabus('');
+    setMockName(''); setMockPhy(''); setMockChem(''); setMockMath('');
     setLoading(false);
-    alert('Mock Saved!');
+    alert('Mock test saved!');
   };
 
-  const handleCompleteChapter = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    await addDoc(collection(db, 'completedChapters'), {
-      userId: selectedUser, subject, chapter: selectedChapter, completedAt: new Date()
+  // --- DATA MANAGEMENT FUNCTIONS ---
+
+  const handleDelete = async (collectionName, id) => {
+    if (confirm('Are you sure you want to permanently delete this record?')) {
+      await deleteDoc(doc(db, collectionName, id));
+      fetchRecords(); // Refresh the list
+    }
+  };
+
+  const startEditing = (record, type) => {
+    setEditingId(record.id);
+    if (type === 'progress') {
+      setEditData({ attempted: record.questionsSolved, correct: record.correctAnswers });
+    } else {
+      setEditData({ examName: record.examName, phy: record.phyScore, chem: record.chemScore, math: record.mathScore });
+    }
+  };
+
+  const saveEdit = async (collectionName, id, type) => {
+    try {
+      if (type === 'progress') {
+        if (Number(editData.correct) > Number(editData.attempted)) return alert("Correct can't exceed attempted!");
+        await updateDoc(doc(db, collectionName, id), {
+          questionsSolved: Number(editData.attempted),
+          correctAnswers: Number(editData.correct)
+        });
+      } else {
+        const p = Number(editData.phy), c = Number(editData.chem), m = Number(editData.math);
+        await updateDoc(doc(db, collectionName, id), {
+          examName: editData.examName,
+          phyScore: p, chemScore: c, mathScore: m,
+          score: p + c + m
+        });
+      }
+      setEditingId(null);
+      fetchRecords();
+    } catch (err) {
+      alert("Error updating record: " + err.message);
+    }
+  };
+
+  const exportCSV = () => {
+    let csv = "Type,User,Subject,Chapter/Exam,Score/Questions,Accuracy,Date\n";
+    records.progress.forEach(r => {
+      const date = r.timestamp?.toDate ? r.timestamp.toDate().toLocaleDateString() : 'N/A';
+      const acc = r.correctAnswers ? ((r.correctAnswers/r.questionsSolved)*100).toFixed(1) : 100;
+      csv += `Practice,${r.userId},${r.subject},${r.chapter},${r.questionsSolved},${acc}%,${date}\n`;
     });
-    setLoading(false);
-    alert('Chapter Marked Complete!');
+    records.mocks.forEach(m => {
+      const date = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleDateString() : 'N/A';
+      csv += `Mock,${m.userId},All,${m.examName},${m.score}/300,N/A,${date}\n`;
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'study_data.csv'; a.click();
   };
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-center gap-3 border-b border-ctp-surface1 pb-4">
         <Shield className="text-ctp-mauve" size={32} />
-        <h1 className="text-2xl font-bold text-ctp-text">Admin Panel</h1>
+        <h1 className="text-2xl font-bold text-ctp-text">Admin Control</h1>
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {['progress', 'mock', 'complete', 'manage'].map((tab) => (
-          <button 
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 rounded-lg font-medium text-sm transition capitalize ${activeTab === tab ? 'bg-ctp-mauve text-ctp-crust' : 'bg-ctp-surface0 text-ctp-subtext0'}`}
-          >
-            {tab === 'complete' ? 'Complete Chapter' : tab === 'manage' ? 'Manage Data' : `${tab} Log`}
+        {['progress', 'mock', 'manage'].map(tab => (
+          <button key={tab} onClick={() => { setActiveTab(tab); setEditingId(null); }} className={`px-4 py-2 rounded-lg text-sm font-medium transition capitalize ${activeTab === tab ? 'bg-ctp-mauve text-ctp-crust' : 'bg-ctp-surface0 text-ctp-subtext0'}`}>
+            {tab}
           </button>
         ))}
       </div>
 
       <div className="bg-ctp-surface0 p-6 rounded-2xl border border-ctp-surface1">
         {activeTab === 'manage' ? (
-          <div className="space-y-6">
-            <h2 className="text-lg font-bold text-ctp-red flex items-center gap-2"><Database size={18}/> Data Editor</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-ctp-base p-4 rounded-xl h-64 overflow-y-auto">
-                <h3 className="font-semibold mb-2 text-ctp-blue">Mock Exams</h3>
-                {logs.mocks.map(m => (
-                  <div key={m.id} className="flex justify-between p-2 border-b border-ctp-surface1 text-xs">
-                    <span>{m.userId} - {m.examName} ({m.score}/300)</span>
-                    <button onClick={() => handleDelete('mockMarks', m.id)} className="text-ctp-red"><Trash2 size={14}/></button>
-                  </div>
-                ))}
-              </div>
-              <div className="bg-ctp-base p-4 rounded-xl h-64 overflow-y-auto">
-                <h3 className="font-semibold mb-2 text-ctp-green">Completed Chapters</h3>
-                {logs.completed.map(c => (
-                  <div key={c.id} className="flex justify-between p-2 border-b border-ctp-surface1 text-xs">
-                    <span>{c.userId} - {c.chapter}</span>
-                    <button onClick={() => handleDelete('completedChapters', c.id)} className="text-ctp-red"><Trash2 size={14}/></button>
+          <div className="space-y-8">
+            <button onClick={exportCSV} className="bg-ctp-blue text-ctp-crust px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:opacity-90 transition">
+              <Download size={16}/> Export as CSV
+            </button>
+
+            {/* PROGRESS LOGS EDITOR */}
+            <div>
+              <h2 className="text-lg font-bold text-ctp-lavender mb-3 border-b border-ctp-surface1 pb-2">Practice Logs</h2>
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
+                {records.progress.map(p => (
+                  <div key={p.id} className="flex items-center justify-between bg-ctp-base p-3 rounded-lg border border-ctp-surface1 text-sm">
+                    {editingId === p.id ? (
+                      <div className="flex-1 grid grid-cols-2 gap-2 mr-4">
+                        <div>
+                          <label className="text-[10px] text-ctp-subtext0">Attempted</label>
+                          <input type="number" value={editData.attempted} onChange={e => setEditData({...editData, attempted: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-ctp-subtext0">Correct</label>
+                          <input type="number" value={editData.correct} onChange={e => setEditData({...editData, correct: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex-1">
+                        <p className="font-bold text-ctp-text">
+                          <span className={p.userId === 'user1' ? 'text-ctp-blue' : 'text-ctp-green'}>
+                            {p.userId === 'user1' ? 'Sharaan' : 'Anadi'}
+                          </span>
+                          <span className="mx-2 text-ctp-subtext0">|</span> 
+                          {p.chapter}
+                        </p>
+                        <p className="text-xs text-ctp-subtext1">Att: {p.questionsSolved} | Cor: {p.correctAnswers}</p>
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center gap-3">
+                      {editingId === p.id ? (
+                        <>
+                          <button onClick={() => saveEdit('progress', p.id, 'progress')} className="text-ctp-green hover:opacity-80"><Save size={18}/></button>
+                          <button onClick={() => setEditingId(null)} className="text-ctp-subtext0 hover:opacity-80"><X size={18}/></button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => startEditing(p, 'progress')} className="text-ctp-yellow hover:opacity-80"><Edit2 size={16}/></button>
+                          <button onClick={() => handleDelete('progress', p.id)} className="text-ctp-red hover:opacity-80"><Trash2 size={16}/></button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
+
+            {/* MOCK LOGS EDITOR */}
+            <div>
+              <h2 className="text-lg font-bold text-ctp-lavender mb-3 border-b border-ctp-surface1 pb-2">Mock Exams</h2>
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
+                {records.mocks.map(m => (
+                  <div key={m.id} className="flex flex-col md:flex-row md:items-center justify-between bg-ctp-base p-3 rounded-lg border border-ctp-surface1 text-sm gap-4">
+                    {editingId === m.id ? (
+                      <div className="flex-1 space-y-2">
+                        <input type="text" value={editData.examName} onChange={e => setEditData({...editData, examName: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
+                        <div className="grid grid-cols-3 gap-2">
+                          <input type="number" placeholder="P" value={editData.phy} onChange={e => setEditData({...editData, phy: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
+                          <input type="number" placeholder="C" value={editData.chem} onChange={e => setEditData({...editData, chem: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
+                          <input type="number" placeholder="M" value={editData.math} onChange={e => setEditData({...editData, math: e.target.value})} className="w-full bg-ctp-surface0 p-1.5 rounded border border-ctp-surface1 text-xs" />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex-1">
+                        <p className="font-bold text-ctp-text">
+                          <span className={m.userId === 'user1' ? 'text-ctp-blue' : 'text-ctp-green'}>
+                            {m.userId === 'user1' ? 'Sharaan' : 'Anadi'}
+                          </span>
+                          <span className="mx-2 text-ctp-subtext0">|</span> 
+                          {m.examName}
+                        </p>
+                        <p className="text-xs text-ctp-subtext1">Total: {m.score}/300 (P:{m.phyScore} C:{m.chemScore} M:{m.mathScore})</p>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-3">
+                      {editingId === m.id ? (
+                        <>
+                          <button onClick={() => saveEdit('mockMarks', m.id, 'mock')} className="text-ctp-green hover:opacity-80"><Save size={18}/></button>
+                          <button onClick={() => setEditingId(null)} className="text-ctp-subtext0 hover:opacity-80"><X size={18}/></button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => startEditing(m, 'mock')} className="text-ctp-yellow hover:opacity-80"><Edit2 size={16}/></button>
+                          <button onClick={() => handleDelete('mockMarks', m.id)} className="text-ctp-red hover:opacity-80"><Trash2 size={16}/></button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
           </div>
         ) : (
-          <form onSubmit={activeTab === 'progress' ? handleLogProgress : activeTab === 'mock' ? handleAddMock : handleCompleteChapter} className="space-y-4">
-            
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs text-ctp-subtext0 mb-1 block">Candidate</label>
-                <select value={activeTab === 'mock' ? mockUser : selectedUser} onChange={(e) => activeTab === 'mock' ? setMockUser(e.target.value) : setSelectedUser(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm">
-                  <option value="user1">User 1</option><option value="user2">User 2</option>
-                </select>
-              </div>
-              
-              {activeTab !== 'mock' && (
-                <div>
-                  <label className="text-xs text-ctp-subtext0 mb-1 block">Subject</label>
-                  <select value={subject} onChange={(e) => handleSubjectChange(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm">
-                    <option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option>
-                  </select>
-                </div>
-              )}
-            </div>
-
-            {activeTab !== 'mock' && (
-              <div>
-                <label className="text-xs text-ctp-subtext0 mb-1 block">Chapter</label>
-                <select value={selectedChapter} onChange={(e) => setSelectedChapter(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm">
-                  {JEE_SYLLABUS[subject].map(chap => <option key={chap} value={chap}>{chap}</option>)}
-                </select>
-              </div>
-            )}
+          <form onSubmit={activeTab === 'progress' ? handleLogProgress : handleSaveMock} className="space-y-4">
+            <select value={user} onChange={(e) => setUser(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 text-ctp-text outline-none text-sm">
+              <option value="user1">Sharaan</option><option value="user2">Anadi</option>
+            </select>
 
             {activeTab === 'progress' && (
-              <input type="number" placeholder="Questions Solved Today" value={questionsSolved} onChange={(e) => setQuestionsSolved(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm" required />
+              <>
+                <select value={subject} onChange={(e) => { setSubject(e.target.value); setChapter(JEE_SYLLABUS[e.target.value][0])}} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm"><option value="Physics">Physics</option><option value="Chemistry">Chemistry</option><option value="Mathematics">Mathematics</option></select>
+                <select value={chapter} onChange={(e) => setChapter(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm">{JEE_SYLLABUS[subject].map(c => <option key={c}>{c}</option>)}</select>
+                <div className="grid grid-cols-2 gap-4">
+                  <input type="number" placeholder="Attempted (e.g. 50)" value={attempted} onChange={e => setAttempted(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded border border-ctp-surface1 text-ctp-text" required />
+                  <input type="number" placeholder="Correct (e.g. 42)" value={correct} onChange={e => setCorrect(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded border border-ctp-surface1 text-ctp-text" required />
+                </div>
+              </>
             )}
 
             {activeTab === 'mock' && (
               <>
-                <input type="text" placeholder="Mock Exam Name" value={mockName} onChange={(e) => setMockName(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm" required />
-                <input type="number" placeholder="Score (Out of 300)" value={mockScore} onChange={(e) => setMockScore(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm" required />
-                <textarea placeholder="Chapters Included (e.g. Kinematics, Atomic Structure)" value={mockSyllabus} onChange={(e) => setMockSyllabus(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded-lg border border-ctp-surface1 outline-none text-sm h-20" required />
+                <input type="text" placeholder="Mock Exam Name" value={mockName} onChange={e => setMockName(e.target.value)} className="w-full bg-ctp-base p-2.5 rounded border border-ctp-surface1 text-ctp-text" required />
+                <div className="grid grid-cols-3 gap-2">
+                  <input type="number" placeholder="Phy /100" value={mockPhy} onChange={e => setMockPhy(e.target.value)} className="bg-ctp-base p-2 rounded border border-ctp-surface1 text-ctp-text" required />
+                  <input type="number" placeholder="Chem /100" value={mockChem} onChange={e => setMockChem(e.target.value)} className="bg-ctp-base p-2 rounded border border-ctp-surface1 text-ctp-text" required />
+                  <input type="number" placeholder="Math /100" value={mockMath} onChange={e => setMockMath(e.target.value)} className="bg-ctp-base p-2 rounded border border-ctp-surface1 text-ctp-text" required />
+                </div>
               </>
             )}
-
-            <button type="submit" disabled={loading} className="w-full bg-ctp-mauve text-ctp-crust font-semibold py-2.5 rounded-lg hover:opacity-90">
-              Save Entry
-            </button>
+            <button type="submit" disabled={loading} className="w-full bg-ctp-mauve text-ctp-crust font-semibold py-2.5 rounded-lg hover:opacity-90">Submit</button>
           </form>
         )}
       </div>

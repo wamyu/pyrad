@@ -18,12 +18,12 @@ export default function Login() {
       <div className="flex gap-4">
         <button onClick={() => navigate('/dashboard/user1')} className="flex flex-col items-center p-6 bg-ctp-surface0 rounded-xl hover:bg-ctp-surface1 transition">
           <User size={48} className="text-ctp-blue mb-2" />
-          <span className="text-xl">User 1</span>
+          <span className="text-xl">Sharan</span>
         </button>
         
         <button onClick={() => navigate('/dashboard/user2')} className="flex flex-col items-center p-6 bg-ctp-surface0 rounded-xl hover:bg-ctp-surface1 transition">
           <User size={48} className="text-ctp-green mb-2" />
-          <span className="text-xl">User 2</span>
+          <span className="text-xl">Anadi</span>
         </button>
       </div>
 
