@@ -4,7 +4,7 @@ import { collection, onSnapshot, query, orderBy, setDoc, doc, addDoc, getDoc } f
 import { db } from '../services/firebase';
 import { JEE_SYLLABUS } from '../data/jeeChapters';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
-import { ArrowLeft, Clock, Flame, Target, Swords, BrainCircuit, BellOff, CheckCircle2, BookOpen, Activity, Grid, PenTool, Edit3, TrendingUp, Crown } from 'lucide-react';
+import { ArrowLeft, Clock, Flame, Target, Swords, BrainCircuit, BellOff, CheckCircle2, BookOpen, Activity, Grid, PenTool, Edit3, TrendingUp, Crown, Timer } from 'lucide-react';
 
 const JEE_TARGET = new Date('2027-01-20T00:00:00');
 const TARGET_QS_PER_CHAPTER = 60; 
@@ -19,7 +19,7 @@ export default function Dashboard() {
   const [snoozedData, setSnoozedData] = useState({});
   const [completedChapters, setCompletedChapters] = useState([]);
   const [goals, setGoals] = useState({ user1: 350, user2: 350 });
-  const [heatmapMax, setHeatmapMax] = useState(80); // Dynamic Admin Limit
+  const [heatmapMax, setHeatmapMax] = useState(80);
 
   const [compSubject, setCompSubject] = useState('Physics');
   const [compChapter, setCompChapter] = useState(JEE_SYLLABUS.Physics[0]);
@@ -29,6 +29,7 @@ export default function Dashboard() {
   const [logChap, setLogChap] = useState(JEE_SYLLABUS.Physics[0]);
   const [logAtt, setLogAtt] = useState('');
   const [logCor, setLogCor] = useState('');
+  const [logHours, setLogHours] = useState('');
 
   const [chartMode, setChartMode] = useState('weekly');
   const [chartSub, setChartSub] = useState('Physics');
@@ -47,7 +48,6 @@ export default function Dashboard() {
       setGoals(g);
     });
     
-    // Fetch custom heatmap block size
     getDoc(doc(db, 'appSettings', 'general')).then(snap => {
       if(snap.exists() && snap.data().heatmapBlocks) setHeatmapMax(snap.data().heatmapBlocks);
     });
@@ -60,23 +60,43 @@ export default function Dashboard() {
 
   const completedSet = useMemo(() => new Set(completedChapters.filter(c => c.userId === userId).map(c => c.chapter)), [completedChapters, userId]);
 
+  // Weekly Stats, Accuracy, and Dynamic Tug-of-War Points Algorithm
   const weeklyStats = useMemo(() => {
-    let u1Att = 0, u1Cor = 0, u2Att = 0, u2Cor = 0;
+    let u1Att = 0, u1Cor = 0, u2Att = 0, u2Cor = 0, u1Hours = 0, u2Hours = 0;
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => ({ name: d, user1: 0, user2: 0 }));
     const sun = new Date(); sun.setDate(sun.getDate() - sun.getDay()); sun.setHours(0,0,0,0);
     
     progressData.forEach(p => {
       const d = p.timestamp?.toDate ? p.timestamp.toDate() : new Date(p.timestamp);
       if (d >= sun) {
-        if (p.userId === 'user1') { u1Att += p.questionsSolved; u1Cor += p.correctAnswers || p.questionsSolved; days[d.getDay()].user1 += p.questionsSolved; }
-        if (p.userId === 'user2') { u2Att += p.questionsSolved; u2Cor += p.correctAnswers || p.questionsSolved; days[d.getDay()].user2 += p.questionsSolved; }
+        if (p.userId === 'user1') { 
+          u1Att += p.questionsSolved; 
+          u1Cor += p.correctAnswers || p.questionsSolved; 
+          u1Hours += Number(p.studyHours || 0);
+          days[d.getDay()].user1 += p.questionsSolved; 
+        }
+        if (p.userId === 'user2') { 
+          u2Att += p.questionsSolved; 
+          u2Cor += p.correctAnswers || p.questionsSolved; 
+          u2Hours += Number(p.studyHours || 0);
+          days[d.getDay()].user2 += p.questionsSolved; 
+        }
       }
     });
 
+    const u1Acc = u1Att ? (u1Cor / u1Att) * 100 : 0;
+    const u2Acc = u2Att ? (u2Cor / u2Att) * 100 : 0;
+
+    // Dynamic Algorithm: Points = Volume * (Accuracy / 50) ^ 1.5
+    // Rewards high accuracy dynamically, penalizes guessing or low accuracy steeply.
+    const u1Points = u1Att * Math.pow(Math.max(u1Acc, 10) / 50, 1.5);
+    const u2Points = u2Att * Math.pow(Math.max(u2Acc, 10) / 50, 1.5);
+
     return {
       u1Vol: u1Att, u2Vol: u2Att,
-      u1Acc: u1Att ? ((u1Cor/u1Att)*100).toFixed(1) : 0,
-      u2Acc: u2Att ? ((u2Cor/u2Att)*100).toFixed(1) : 0,
+      u1Acc: u1Acc.toFixed(1), u2Acc: u2Acc.toFixed(1),
+      u1Hours, u2Hours,
+      u1Points, u2Points,
       chartData: days
     };
   }, [progressData]);
@@ -97,7 +117,7 @@ export default function Dashboard() {
     let items = [];
     progressData.forEach(p => {
       const t = p.timestamp?.toDate ? p.timestamp.toDate().getTime() : 0;
-      if (t > dayAgo) items.push({ id: Math.random(), type: 'practice', time: t, user: p.userId, text: `solved ${p.questionsSolved} Qs in ${p.chapter}` });
+      if (t > dayAgo) items.push({ id: Math.random(), type: 'practice', time: t, user: p.userId, text: `solved ${p.questionsSolved} Qs (${p.studyHours || 0}h) in ${p.chapter}` });
     });
     completedChapters.forEach(c => {
       const t = c.completedAt?.toDate ? c.completedAt.toDate().getTime() : 0;
@@ -110,7 +130,6 @@ export default function Dashboard() {
     return items.sort((a,b) => b.time - a.time);
   }, [progressData, completedChapters, mockScores]);
 
-  // Dynamic Heatmap (Supports customizable block count)
   const heatmapData = useMemo(() => {
     const res = [];
     ['Physics', 'Chemistry', 'Mathematics'].forEach(sub => {
@@ -118,8 +137,6 @@ export default function Dashboard() {
         res.push({ name: chap, subject: sub, done: completedSet.has(chap) });
       });
     });
-
-    // Pad or slice based on Admin's setting
     if (res.length > heatmapMax) return res.slice(0, heatmapMax);
     while (res.length < heatmapMax) {
       res.push({ name: 'Unassigned/Mock', subject: 'None', done: false, isPlaceholder: true });
@@ -127,6 +144,7 @@ export default function Dashboard() {
     return res;
   }, [completedSet, heatmapMax]);
 
+  // Dominance Streak
   const competitiveStreak = useMemo(() => {
     const dailyTotals = {};
     progressData.forEach(p => {
@@ -142,6 +160,32 @@ export default function Dashboard() {
       if (t.user1 === 0 && t.user2 === 0) continue;
       const winner = t.user1 > t.user2 ? 'user1' : (t.user2 > t.user1 ? 'user2' : 'tie');
       if (winner === userId) streak++; else if (winner !== 'tie') break; 
+    }
+    return streak;
+  }, [progressData, userId]);
+
+  // Daily Consistency Streak Bar
+  const dailyStreak = useMemo(() => {
+    const userDays = new Set();
+    progressData.forEach(p => {
+      if (p.userId === userId) {
+        const d = p.timestamp?.toDate ? p.timestamp.toDate().toISOString().split('T')[0] : null;
+        if (d) userDays.add(d);
+      }
+    });
+    let streak = 0;
+    let checkDate = new Date();
+    for (let i = 0; i < 30; i++) {
+      const dateStr = checkDate.toISOString().split('T')[0];
+      if (userDays.has(dateStr)) {
+        streak++;
+        checkDate.setDate(checkDate.getDate() - 1);
+      } else if (i === 0) {
+        // Allow today to be missing if they haven't logged yet
+        checkDate.setDate(checkDate.getDate() - 1);
+      } else {
+        break;
+      }
     }
     return streak;
   }, [progressData, userId]);
@@ -176,40 +220,43 @@ export default function Dashboard() {
     return actions.sort((a,b) => b.weight - a.weight).slice(0, 3);
   }, [progressData, userId, snoozedData, daysLeft, completedSet]);
 
-  // Actions
   const handleSetGoal = async (e) => {
     e.preventDefault();
     if (!newGoal) return;
     await setDoc(doc(db, 'userGoals', userId), { weeklyTarget: Number(newGoal) }, { merge: true });
     setNewGoal('');
   };
+
   const handleQuickLog = async (e) => {
     e.preventDefault();
     if (Number(logCor) > Number(logAtt)) return alert("Correct can't exceed Attempted!");
     await addDoc(collection(db, 'progress'), {
       userId, subject: logSub, chapter: logChap,
-      questionsSolved: Number(logAtt), correctAnswers: Number(logCor), timestamp: new Date()
+      questionsSolved: Number(logAtt), correctAnswers: Number(logCor), 
+      studyHours: Number(logHours || 0), timestamp: new Date()
     });
-    setLogAtt(''); setLogCor(''); alert('Logged successfully!');
+    setLogAtt(''); setLogCor(''); setLogHours(''); alert('Logged successfully!');
   };
+
   const handleMarkComplete = async (e) => {
     e.preventDefault();
     if (completedSet.has(compChapter)) return alert('Already completed!');
     await addDoc(collection(db, 'completedChapters'), { userId, subject: compSubject, chapter: compChapter, completedAt: new Date() });
   };
+
   const handleSnooze = async (chapter, days) => {
     const d = new Date(); d.setDate(d.getDate() + days);
     await setDoc(doc(db, 'chapterMeta', `${userId}_${chapter.replace(/\s+/g, '')}`), { userId, chapter, delayUntil: d.getTime() });
   };
 
-  // Gamified Tug-of-war calculation
-  const totalVolume = weeklyStats.u1Vol + weeklyStats.u2Vol;
-  const u1Dominance = totalVolume > 0 ? (weeklyStats.u1Vol / totalVolume) * 100 : 50;
+  // Tug-of-war algorithmic points distribution
+  const totalPoints = weeklyStats.u1Points + weeklyStats.u2Points;
+  const u1Dominance = totalPoints > 0 ? (weeklyStats.u1Points / totalPoints) * 100 : 50;
 
   return (
     <div className="min-h-screen bg-ctp-crust text-ctp-text font-sans p-4 md:p-8">
       
-      <header className="max-w-6xl mx-auto flex items-center justify-between bg-ctp-base/60 backdrop-blur-xl p-4 md:px-6 rounded-3xl border border-ctp-surface0 shadow-sm mb-6 sticky top-4 z-50 overflow-hidden">
+      <header className="max-w-6xl mx-auto flex items-center justify-between bg-ctp-base/65 backdrop-blur-xl p-4 md:px-6 rounded-3xl border border-ctp-surface0 shadow-sm mb-6 sticky top-4 z-50 overflow-hidden">
         <div className="flex items-center gap-4 min-w-0">
           <Link to="/" className="p-2 bg-ctp-surface0 hover:bg-ctp-surface1 rounded-full shrink-0 text-ctp-subtext0"><ArrowLeft size={18} /></Link>
           <div className="min-w-0">
@@ -226,13 +273,28 @@ export default function Dashboard() {
         
         {/* ROW 1: Gamification & Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm flex items-center justify-between relative overflow-hidden group">
+          
+          {/* Streak Column with Daily Consistency Bar below */}
+          <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm flex flex-col justify-between relative overflow-hidden group">
             <div className="absolute top-0 right-0 w-32 h-32 bg-ctp-peach/5 rounded-full blur-2xl transition duration-500"/>
-            <div className="relative z-10 min-w-0">
-              <p className="text-xs text-ctp-subtext0 font-bold uppercase mb-1">Dominance Streak</p>
-              <p className="text-4xl font-black text-ctp-peach truncate">{competitiveStreak} <span className="text-base font-medium text-ctp-subtext0">Days</span></p>
+            <div className="flex items-center justify-between relative z-10 mb-4">
+              <div className="min-w-0">
+                <p className="text-xs text-ctp-subtext0 font-bold uppercase mb-1">Dominance Streak</p>
+                <p className="text-4xl font-black text-ctp-peach truncate">{competitiveStreak} <span className="text-base font-medium text-ctp-subtext0">Days</span></p>
+              </div>
+              <Flame size={48} className={`relative z-10 shrink-0 ${competitiveStreak > 0 ? 'text-ctp-peach' : 'text-ctp-surface2'}`} />
             </div>
-            <Flame size={48} className={`relative z-10 shrink-0 ${competitiveStreak > 0 ? 'text-ctp-peach' : 'text-ctp-surface2'}`} />
+
+            {/* Daily Consistency Streak Bar placed below */}
+            <div className="pt-3 border-t border-ctp-surface0 relative z-10">
+              <div className="flex justify-between text-xs font-bold mb-1">
+                <span className="text-ctp-subtext0 uppercase tracking-wider text-[10px]">Daily Consistency</span>
+                <span className="text-ctp-green">{dailyStreak} Day Streak</span>
+              </div>
+              <div className="w-full bg-ctp-surface0 h-2 rounded-full overflow-hidden">
+                <div className="bg-ctp-green h-full rounded-full transition-all duration-500" style={{ width: `${Math.min((dailyStreak / 30) * 100, 100)}%` }} />
+              </div>
+            </div>
           </div>
 
           <div className="bg-ctp-base p-6 rounded-3xl border border-ctp-surface0 shadow-sm relative flex flex-col justify-between">
@@ -252,27 +314,29 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Gamified Head-To-Head */}
+          {/* Gamified Tug-of-War using Volume + Accuracy Algorithm */}
           <div className="bg-ctp-base p-5 rounded-3xl border border-ctp-surface0 shadow-sm flex flex-col justify-center">
-             <div className="flex items-center gap-2 text-ctp-mauve mb-3"><Swords size={18}/> <span className="text-xs font-bold uppercase tracking-wider">Tug of War (This Week)</span></div>
+             <div className="flex items-center justify-between mb-2">
+               <div className="flex items-center gap-2 text-ctp-mauve"><Swords size={18}/> <span className="text-xs font-bold uppercase tracking-wider">Tug of War (Algo-Weighted)</span></div>
+             </div>
              
              <div className="flex justify-between items-end text-center px-2">
                <div className="flex flex-col items-center">
-                 {weeklyStats.u1Vol > weeklyStats.u2Vol && <Crown size={16} className="text-ctp-yellow mb-1"/>}
-                 <p className="text-2xl font-black text-ctp-blue leading-none">{weeklyStats.u1Vol}</p>
+                 {weeklyStats.u1Points > weeklyStats.u2Points && <Crown size={16} className="text-ctp-yellow mb-1"/>}
+                 <p className="text-2xl font-black text-ctp-blue leading-none">{weeklyStats.u1Vol} <span className="text-[10px] font-normal text-ctp-subtext0">({weeklyStats.u1Hours}h)</span></p>
                  <p className="text-[10px] font-bold text-ctp-subtext0 mt-1">Sharaan</p>
                  <p className="text-[9px] text-ctp-green font-bold">{weeklyStats.u1Acc}% Acc</p>
                </div>
                <p className="text-[10px] font-black text-ctp-surface2 mb-4">VS</p>
                <div className="flex flex-col items-center">
-                 {weeklyStats.u2Vol > weeklyStats.u1Vol && <Crown size={16} className="text-ctp-yellow mb-1"/>}
-                 <p className="text-2xl font-black text-ctp-green leading-none">{weeklyStats.u2Vol}</p>
+                 {weeklyStats.u2Points > weeklyStats.u1Points && <Crown size={16} className="text-ctp-yellow mb-1"/>}
+                 <p className="text-2xl font-black text-ctp-green leading-none">{weeklyStats.u2Vol} <span className="text-[10px] font-normal text-ctp-subtext0">({weeklyStats.u2Hours}h)</span></p>
                  <p className="text-[10px] font-bold text-ctp-subtext0 mt-1">Anadi</p>
                  <p className="text-[9px] text-ctp-green font-bold">{weeklyStats.u2Acc}% Acc</p>
                </div>
              </div>
 
-             {/* Tug of War Bar */}
+             {/* Tug of War Bar driven by weighted algorithm */}
              <div className="w-full h-2.5 bg-ctp-surface0 rounded-full mt-3 flex overflow-hidden">
                 <div className="bg-ctp-blue h-full transition-all duration-700 ease-out relative" style={{ width: `${u1Dominance}%` }}>
                   <div className="absolute right-0 top-0 bottom-0 w-1 bg-ctp-text opacity-50"></div>
@@ -293,6 +357,10 @@ export default function Dashboard() {
                 <div className="grid grid-cols-2 gap-2">
                   <input type="number" placeholder="Attempted" value={logAtt} onChange={e=>setLogAtt(e.target.value)} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1" required/>
                   <input type="number" placeholder="Correct" value={logCor} onChange={e=>setLogCor(e.target.value)} className="bg-ctp-surface0 p-2 rounded-xl text-xs outline-none border border-ctp-surface1" required/>
+                </div>
+                <div className="relative">
+                  <input type="number" step="0.5" placeholder="Study Hours (e.g. 2.5)" value={logHours} onChange={e=>setLogHours(e.target.value)} className="w-full bg-ctp-surface0 p-2 pl-8 rounded-xl text-xs outline-none border border-ctp-surface1" />
+                  <Timer size={14} className="absolute left-2.5 top-2.5 text-ctp-subtext0" />
                 </div>
                 <button type="submit" className="w-full bg-ctp-blue text-ctp-crust font-bold py-2 rounded-xl hover:opacity-90 transition text-sm">Save Progress</button>
               </form>
